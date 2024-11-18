@@ -1,8 +1,15 @@
-use core::fmt;
-use std::{borrow::Cow, cell::Cell, collections::{hash_map, HashMap, HashSet}, ops::Add};
-use rand::{random, rngs::ThreadRng, thread_rng, Rng};
+use core::{fmt};
+use std::{borrow::Cow, cell::Cell, collections::{hash_map, HashMap, HashSet}, fs::File, io::{BufWriter, Write}, ops::Add};
+use rand::{random, thread_rng, Rng};
+use std::time::{Duration, Instant};
 
 use sha3::{Digest, Sha3_224};
+
+#[derive(Debug)]
+struct AttackResult {
+    iterations_count: u64,
+    collision: (String, String)
+}
 
 trait StringModificator<'a> {
     fn from_str(s: &'a str) -> Self;
@@ -56,20 +63,26 @@ impl<'a> StringModificator<'a> for AdditionStringModifier<'a> {
 impl<'a> StringModificator<'a> for RandomChangeStringModifier {
     fn modifyDebug(&self) -> (String, usize) {
         let mut changable_str = self.data.clone().into_bytes();
-        let random_pos:usize = random::<usize>() % self.data.len();
+        let random_pos:u32 = random::<u32>() % (self.data.len() as u32);
         let random_change:u8 = random::<u8>() & 127; // because we want ascii in utf8
         changable_str[random_pos as usize] = random_change;
         match String::from_utf8(changable_str) {
-            Ok(val) => (val, random_pos),
-            _ => (String::new(), random_pos)
+            Ok(val) => (val, random_pos as usize),
+            _ => (String::new(), random_pos as usize)
         }
     }
     
     fn modify(&mut self) -> String {
         let mut changable_str = self.data.clone().into_bytes();
-        let random_pos:usize = random::<usize>() % self.data.len();
-        let random_change:u8 = random::<u8>() & 127; // because we want ascii in utf8
-        changable_str[random_pos as usize] = (random_change + changable_str[random_pos as usize]) & 127;
+        let mut rng = thread_rng();
+        let random_pos:usize = rng.gen_range(0..self.data.len());
+        loop {
+            let random_change:u8 = rng.gen_range(0..128); // because we want ascii in utf8
+            if random_change != changable_str[random_pos as usize] {
+                changable_str[random_pos as usize] = random_change;
+                break;
+            }
+        }
         match String::from_utf8(changable_str) {
             Ok(val) => {
                 self.data = val.clone();
@@ -81,6 +94,12 @@ impl<'a> StringModificator<'a> for RandomChangeStringModifier {
     
     fn from_str(s: &'a str) -> Self {
         RandomChangeStringModifier::new(s)
+    }
+}
+
+impl AttackResult {
+    fn to_string(&self) -> String {
+        format!("Iterations Count: {0}\nFounded collision: ({1}, {2})", self.iterations_count, self.collision.0, self.collision.1)
     }
 }
 
@@ -129,39 +148,44 @@ fn hash<'a>(s: &'a str) -> String {
 }
 
 
-fn second_preimage_attack<'a, T>(s: &'a str) -> (String, String)
+fn second_preimage_attack<'a, T>(s: &'a str) -> AttackResult
 where
 T: StringModificator<'a>
 {
     let hashed_value = hash(s);
     let mut modifier: T = T::from_str(s);
+    let mut iter_count: u64 = 0;
     loop {
         let modified_value = modifier.modify();
         let hashed_modified_value = hash(&modified_value);
+        iter_count += 1;
         // println!("modified_value: {:?}", modified_value);
         if &hashed_value[hashed_value.len() - 4..] == &hashed_modified_value[hashed_modified_value.len() - 4..] {
-            return (s.to_owned(), modified_value);
+            return AttackResult {
+                iterations_count: iter_count,
+                collision : (s.to_owned(), modified_value)
+            };
         }
     }
 }
 
-fn birthday_attack<'a, T>(s: &'a str) -> (String, String) 
+fn birthday_attack<'a, T>(s: &'a str) -> AttackResult
 where
 T : StringModificator<'a>
 {
     let mut hash_set = HashMap::<String, String>::new();
     let mut modifier: T = T::from_str(s);
-
+    let mut iter_count: u64 = 0;
     loop {
         let val = modifier.modify();
         let hash_val = hash(&val);
         let hash_val = &hash_val[hash_val.len() - 8..];
+        iter_count += 1;
         if let Some(finded) = hash_set.get(hash_val) {
-            let finded = finded.to_owned();
-            if finded == val {
-                continue;
-            }
-            return (val, finded);
+            return AttackResult {
+                iterations_count: iter_count,
+                collision: (val, finded.to_owned())
+            };
         } else {
             hash_set.insert(hash_val.to_owned(), val);
         }
@@ -169,50 +193,84 @@ T : StringModificator<'a>
 }
 
 fn test_random_changes(hash_input: &str) {
-    let modifier = RandomChangeStringModifier::new(&hash_input);
-    let mut hash_map = HashMap::<usize, usize>::new();
-    
-    let n = 260_000;
-
+    let mut modifier = RandomChangeStringModifier::new(&hash_input);
+    let mut hash_map = HashMap::<usize, u64>::new();
+    let n = hash_input.len() * 100;
+    let mut rng = rand::thread_rng();
     for _ in 0..n {
-        let modify_res = modifier.modifyDebug();
-        if let Some(val) = hash_map.get_mut(&modify_res.1) {
+        let temp = rng.gen_range(0..hash_input.len());
+        //let temp = random::<usize>() % hash_input.len();
+        if let Some(val) = hash_map.get_mut(&temp) {
             *val += 1;
         } else {
-            hash_map.insert(modify_res.1, 1);
+            hash_map.insert(temp, 0);
         }
     }
 
-    for pair in hash_map.iter() {
-        let stat = 1.0 - (*pair.1 as f64) / ((n as f64) / 26.0);
-        println!("{:?}: {1}", pair.0, stat);
+    for (k, v) in hash_map.iter() {
+        println!("{0} : {1}", k, v);
+    }
+}
+
+fn gen_initial_message() -> String {
+    let mut res = String::from("IsachenkoNikitaSergiyovich");
+    let random_number = random::<u16>();
+    res.push_str(&random_number.to_string());
+    res
+}
+
+fn test_attack<F : Fn(&str) -> AttackResult>(attack_function: F, n: u32, output_file: &str) {
+    let file = File::create(output_file);
+    if file.is_err() {
+        panic!("output_file is incorrect!");
     }
 
-    println!("{:?}", hash_map.len());
-    println!("{:?}", hash_map);
+    let file = file.unwrap();
+    let mut writer = BufWriter::new(&file);
+
+    for i in 1..=n {
+        println!("Attack {i}/{n}");
+        let initial_message = gen_initial_message();
+        let message_hash: String = hash(&initial_message);
+        let timer = Instant::now();
+        let res = attack_function(&initial_message);
+        let timer = timer.elapsed();
+        _ = writeln!(writer, "N_{i}\nInitial message: {initial_message}\nHashed initial message: {message_hash}\n{0}\nElapsed time: {1} ms.\n\n\n", res.to_string(), timer.as_millis().to_string());
+    }
 }
 
-fn gen_initial_message() {
-    todo!()
-}
-
+// TODO: add comand line args parser
 fn main() {
-    let hash_input = "NikitaIsachenkoSergiyovich";
-    let hash_val = hash("NikitaIsachenkoSergiyovich");
-    println!("Hash: {:?}", hash_val);
-    println!("Len: {:?}", "NikitaIsachenkoSergiyovich".len());
+    let args: Vec<_> = std::env::args().collect();
+    let n = if args.len() < 2 {
+        1
+    } else {
+        if let Ok(val) = args[1].parse::<u32>() {
+            val
+        } else {
+            panic!("Arg must be a num")
+        }
+    };
+    println!("Second preimage attack(addition):");
+    test_attack(
+        |s: &str| -> AttackResult {
+        second_preimage_attack::<AdditionStringModifier>(s)
+    }, n, "second_preimage_addition_stategy.txt");
+    println!("\nSecond preimage attack(randchange):");
+    test_attack(
+        |s: &str| -> AttackResult {
+        second_preimage_attack::<RandomChangeStringModifier>(s)
+    }, n, "second_preimage_randchange_stategy.txt");
+    println!("\nBirthday attack(addition):");
+    test_attack(
+        |s: &str| -> AttackResult {
+        birthday_attack::<AdditionStringModifier>(s)
+    }, n, "birthday_addition_stategy.txt");
+    println!("\nBirthday attack(randchange):");
+    test_attack(
+        |s: &str| -> AttackResult {
+        birthday_attack::<RandomChangeStringModifier>(s)
+    }, n, "birthday_randchange_stategy.txt");
 
-    // println!("Addition Modifications strategy: ");
-    // let res= second_preimage_attack::<AdditionStringModifier>(&hash_input);
-    // println!("{:?}", res);
-    // println!("Changing Modifications strategy: ");
-    // let res= second_preimage_attack::<RandomChangeStringModifier>(&hash_input);
-    // println!("{:?}", res);
-
-    println!("Addition Modifications strategy: ");
-    // let res= birthday_attack::<AdditionStringModifier>(&hash_input);
-    //println!("{:?}", res);
-    println!("Changing Modifications strategy: ");
-    let res= birthday_attack::<RandomChangeStringModifier>(&hash_input);
-    println!("{:?}", res);
+    //test_random_changes(hash_input);
 }
