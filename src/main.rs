@@ -99,7 +99,10 @@ impl<'a> StringModificator<'a> for RandomChangeStringModifier {
 
 impl AttackResult {
     fn to_string(&self) -> String {
-        format!("Iterations Count: {0}\nFounded collision: ({1}, {2})", self.iterations_count, self.collision.0, self.collision.1)
+        format!("Iterations Count: {0}
+        Founded collision: ({1}, {2})
+        Hash1: {3}
+        Hash2: {4}", self.iterations_count, self.collision.0, self.collision.1, hash(&self.collision.0), hash(&self.collision.1))
     }
 }
 
@@ -226,21 +229,30 @@ fn test_attack<F : Fn(&str) -> AttackResult>(attack_function: F, n: u32, output_
     }
 
     let file = file.unwrap();
-    let mut writer = BufWriter::new(&file);
-
+    //let mut writer = BufWriter::new(&file);
+    let mut  csv_writer = csv::WriterBuilder::new()
+        .delimiter(b';')
+        .from_writer(&file);
+    _ = csv_writer.write_record(&["N", "Initial_Message", "Message_Hash", "Collision_1", "Collision_2", "Hash_1", "Hash_2", "Iterations", "Time elapsed"]);
     for i in 1..=n {
-        println!("Attack {i}/{n}");
+        println!("Attack {i}/{n}:");
         let initial_message = gen_initial_message();
         let message_hash: String = hash(&initial_message);
         let timer = Instant::now();
         let res = attack_function(&initial_message);
         let timer = timer.elapsed();
-        _ = writeln!(writer, "N_{i}\nInitial message: {initial_message}\nHashed initial message: {message_hash}\n{0}\nElapsed time: {1} ms.\n\n\n", res.to_string(), timer.as_millis().to_string());
+        // _ = writeln!(writer, 
+        // "N_{i}\n
+        // message_hash: {message_hash}
+        // {0}
+        // Elapsed time: {1} ms.\n\n", res.to_string(), timer.as_millis());
+        let hash1 = hash(&res.collision.0);
+        let hash2 = hash(&res.collision.1);
+        _ = csv_writer.write_record(&[&i.to_string(), initial_message.as_str(), &message_hash, &res.collision.0, &res.collision.1, &hash1, &hash2, &res.iterations_count.to_string(), &timer.as_millis().to_string()]);
     }
 }
 
-// TODO: add comand line args parser
-fn main() {
+fn app() {
     let args: Vec<_> = std::env::args().collect();
     let n = if args.len() < 2 {
         1
@@ -255,22 +267,32 @@ fn main() {
     test_attack(
         |s: &str| -> AttackResult {
         second_preimage_attack::<AdditionStringModifier>(s)
-    }, n, "second_preimage_addition_stategy.txt");
+    }, n, "second_preimage_addition_stategy.csv");
     println!("\nSecond preimage attack(randchange):");
     test_attack(
         |s: &str| -> AttackResult {
         second_preimage_attack::<RandomChangeStringModifier>(s)
-    }, n, "second_preimage_randchange_stategy.txt");
+    }, n, "second_preimage_randchange_stategy.csv");
+    
     println!("\nBirthday attack(addition):");
     test_attack(
         |s: &str| -> AttackResult {
         birthday_attack::<AdditionStringModifier>(s)
-    }, n, "birthday_addition_stategy.txt");
+    }, n, "birthday_addition_stategy.csv");
     println!("\nBirthday attack(randchange):");
     test_attack(
         |s: &str| -> AttackResult {
         birthday_attack::<RandomChangeStringModifier>(s)
-    }, n, "birthday_randchange_stategy.txt");
+    }, n, "birthday_randchange_stategy.csv");
+}
 
-    //test_random_changes(hash_input);
+// TODO: add comand line args parser
+fn main() {
+    app();
+
+    // let res: AttackResult = birthday_attack::<RandomChangeStringModifier>("HelloWorld!");
+    // let hash1 = hash(&res.collision.0);
+    // let hash2 = hash(&res.collision.1);
+    // println!("{:?}", res);
+    // println!("Hash1: {hash1},\nHash2: {hash2}");
 }
