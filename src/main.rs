@@ -61,17 +61,6 @@ impl<'a> StringModificator<'a> for AdditionStringModifier<'a> {
 }
 
 impl<'a> StringModificator<'a> for RandomChangeStringModifier {
-    fn modifyDebug(&self) -> (String, usize) {
-        let mut changable_str = self.data.clone().into_bytes();
-        let random_pos:u32 = random::<u32>() % (self.data.len() as u32);
-        let random_change:u8 = random::<u8>() & 127; // because we want ascii in utf8
-        changable_str[random_pos as usize] = random_change;
-        match String::from_utf8(changable_str) {
-            Ok(val) => (val, random_pos as usize),
-            _ => (String::new(), random_pos as usize)
-        }
-    }
-    
     fn modify(&mut self) -> String {
         let mut changable_str = self.data.clone().into_bytes();
         let mut rng = thread_rng();
@@ -159,10 +148,10 @@ T: StringModificator<'a>
     let mut modifier: T = T::from_str(s);
     let mut iter_count: u64 = 0;
     loop {
+        iter_count += 1;
         let modified_value = modifier.modify();
         let hashed_modified_value = hash(&modified_value);
-        iter_count += 1;
-        // println!("modified_value: {:?}", modified_value);
+        // if iter_count <= 30 {println!("{:?}", modified_value)};
         if &hashed_value[hashed_value.len() - 4..] == &hashed_modified_value[hashed_modified_value.len() - 4..] {
             return AttackResult {
                 iterations_count: iter_count,
@@ -180,11 +169,13 @@ T : StringModificator<'a>
     let mut modifier: T = T::from_str(s);
     let mut iter_count: u64 = 0;
     loop {
+        iter_count += 1;
         let val = modifier.modify();
         let hash_val = hash(&val);
         let hash_val = &hash_val[hash_val.len() - 8..];
-        iter_count += 1;
+        // if iter_count <= 30 {println!("{:?}", val)};
         if let Some(finded) = hash_set.get(hash_val) {
+            if finded == &val { continue; }
             return AttackResult {
                 iterations_count: iter_count,
                 collision: (val, finded.to_owned())
@@ -263,36 +254,44 @@ fn app() {
             panic!("Arg must be a num")
         }
     };
+
+    let filename = if args.len() < 3 {
+        ""
+    } else {
+        args[2].as_str()
+    };
+
     println!("Second preimage attack(addition):");
     test_attack(
         |s: &str| -> AttackResult {
         second_preimage_attack::<AdditionStringModifier>(s)
-    }, n, "second_preimage_addition_stategy.csv");
+    }, n, &format!("{filename}_{0}", "second_preimage_addition_stategy.csv"));
     println!("\nSecond preimage attack(randchange):");
     test_attack(
         |s: &str| -> AttackResult {
         second_preimage_attack::<RandomChangeStringModifier>(s)
-    }, n, "second_preimage_randchange_stategy.csv");
+    }, n, &format!("{filename}_{0}","second_preimage_randchange_stategy.csv"));
     
     println!("\nBirthday attack(addition):");
     test_attack(
         |s: &str| -> AttackResult {
         birthday_attack::<AdditionStringModifier>(s)
-    }, n, "birthday_addition_stategy.csv");
+    }, n, &format!("{filename}_{0}","birthday_addition_stategy.csv"));
     println!("\nBirthday attack(randchange):");
     test_attack(
         |s: &str| -> AttackResult {
         birthday_attack::<RandomChangeStringModifier>(s)
-    }, n, "birthday_randchange_stategy.csv");
+    }, n, &format!("{filename}_{0}","birthday_randchange_stategy.csv"));
 }
 
 // TODO: add comand line args parser
 fn main() {
     app();
-
-    // let res: AttackResult = birthday_attack::<RandomChangeStringModifier>("HelloWorld!");
+    // let message = gen_initial_message();
+    // let res: AttackResult = second_preimage_attack::<RandomChangeStringModifier>(&message);
     // let hash1 = hash(&res.collision.0);
     // let hash2 = hash(&res.collision.1);
+    // println!("Initial message: {message}");
     // println!("{:?}", res);
     // println!("Hash1: {hash1},\nHash2: {hash2}");
 }
